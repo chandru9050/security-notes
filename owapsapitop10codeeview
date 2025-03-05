@@ -1,0 +1,621 @@
+
+
+## Introduction
+
+Modern web applications and APIs are continually threatened by a wide range of vulnerabilities. The [OWASP API Security Top 10](https://owasp.org/www-project-api-security/) highlights the most common and critical API vulnerabilities, while the [SANS Top 25 Most Dangerous Software Errors](https://www.sans.org/top25-software-errors/) identify common programming errors that can lead to severe security issues. This guide provides a quick reference—including Java code examples—to help developers understand and mitigate these vulnerabilities.
+
+---
+
+## OWASP API Security Vulnerabilities
+
+### API1: Broken Object Level Authorization
+
+**Description:**  
+This vulnerability occurs when an API does not properly enforce access controls for objects. Attackers may manipulate object identifiers to access unauthorized data.
+
+**Vulnerable Example:**
+```java
+// Vulnerable endpoint without proper object-level checks
+public class AccountService {
+    public Account getAccount(String accountId, String userId) {
+        // Directly fetch the account by ID without checking if userId owns the account
+        Account account = Database.getAccountById(accountId);
+        return account;
+    }
+}
+```
+
+**Mitigation:**  
+Implement authorization checks to ensure the requesting user has access rights.
+```java
+public class AccountService {
+    public Account getAccount(String accountId, String userId) {
+        Account account = Database.getAccountById(accountId);
+        if (account != null && account.getOwnerId().equals(userId)) {
+            return account;
+        } else {
+            throw new UnauthorizedAccessException("Access denied.");
+        }
+    }
+}
+```
+
+---
+
+### API2: Broken User Authentication
+
+**Description:**  
+Occurs when authentication mechanisms are improperly implemented, allowing attackers to bypass login procedures.
+
+**Vulnerable Example:**
+```java
+// Vulnerable login logic (example only – do not use plain-text password comparisons)
+public class AuthService {
+    public boolean login(String username, String password) {
+        User user = Database.getUser(username);
+        // Direct comparison without secure hash
+        return user != null && user.getPassword().equals(password);
+    }
+}
+```
+
+**Mitigation:**  
+Use secure password storage (hashing with salt) and robust session management.
+```java
+public class AuthService {
+    public boolean login(String username, String password) {
+        User user = Database.getUser(username);
+        if (user != null && PasswordUtil.verifyPassword(password, user.getHashedPassword())) {
+            // create secure session
+            return true;
+        }
+        return false;
+    }
+}
+```
+
+---
+
+### API3: Excessive Data Exposure
+
+**Description:**  
+APIs may return more data than necessary, exposing sensitive information.
+
+**Vulnerable Example:**
+```java
+// Vulnerable API that returns the entire user object
+public class UserController {
+    public User getUser(String userId) {
+        return Database.getUserById(userId); // Returns all fields including sensitive data
+    }
+}
+```
+
+**Mitigation:**  
+Return only the data required by the client.
+```java
+public class UserController {
+    public UserDTO getUser(String userId) {
+        User user = Database.getUserById(userId);
+        // Map to a DTO that contains only non-sensitive fields
+        return new UserDTO(user.getUsername(), user.getEmail());
+    }
+}
+```
+
+---
+
+### API4: Lack of Resources & Rate Limiting
+
+**Description:**  
+APIs that do not implement rate limiting are prone to abuse and denial-of-service (DoS) attacks.
+
+**Vulnerable Example:**
+```java
+// Simplified endpoint without rate limiting
+public class CommentController {
+    public void postComment(String comment, String userId) {
+        Database.saveComment(comment, userId);
+    }
+}
+```
+
+**Mitigation:**  
+Introduce rate limiting mechanisms (using libraries or API gateways) to throttle requests.
+```java
+public class CommentController {
+    private static final RateLimiter rateLimiter = new RateLimiter(5, TimeUnit.SECONDS);
+    
+    public void postComment(String comment, String userId) {
+        if (!rateLimiter.allowRequest(userId)) {
+            throw new TooManyRequestsException("Rate limit exceeded");
+        }
+        Database.saveComment(comment, userId);
+    }
+}
+```
+
+---
+
+### API5: Broken Function Level Authorization
+
+**Description:**  
+Different functions within the API might have different authorization requirements. When these are not properly enforced, attackers can access higher-privileged functionality.
+
+**Vulnerable Example:**
+```java
+// Vulnerable: no check on user roles for admin-level operations
+public class UserController {
+    public void deleteUser(String userId) {
+        Database.deleteUser(userId);
+    }
+}
+```
+
+**Mitigation:**  
+Enforce role-based access control (RBAC) at the function level.
+```java
+public class UserController {
+    public void deleteUser(String userId, User currentUser) {
+        if (!currentUser.hasRole("ADMIN")) {
+            throw new UnauthorizedAccessException("Admin role required");
+        }
+        Database.deleteUser(userId);
+    }
+}
+```
+
+---
+
+### API6: Mass Assignment
+
+**Description:**  
+When APIs automatically bind all provided parameters to model fields, attackers may modify properties they should not be allowed to change.
+
+**Vulnerable Example:**
+```java
+// Vulnerable: binding all JSON properties to the User object
+public class UserController {
+    public void updateUser(User user) {
+        Database.updateUser(user); // No filtering of fields
+    }
+}
+```
+
+**Mitigation:**  
+Use explicit binding (e.g., DTOs) to control which fields can be updated.
+```java
+public class UserController {
+    public void updateUser(String userId, UserUpdateDTO userDto) {
+        User user = Database.getUserById(userId);
+        user.setEmail(userDto.getEmail());
+        // Other allowed updates...
+        Database.updateUser(user);
+    }
+}
+```
+
+---
+
+### API7: Security Misconfiguration
+
+**Description:**  
+Security misconfiguration can occur at any level (server, framework, database) when defaults are used or configurations are incomplete.
+
+**Vulnerable Example:**
+```java
+// Example: misconfigured CORS settings in a servlet
+@WebServlet("/api/data")
+public class DataServlet extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        // Insecure: Allowing any origin
+        response.setHeader("Access-Control-Allow-Origin", "*");
+        response.getWriter().write("Sensitive Data");
+    }
+}
+```
+
+**Mitigation:**  
+Harden configurations by specifying only trusted domains and using secure defaults.
+```java
+@WebServlet("/api/data")
+public class DataServlet extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        // Secure: Allow only specific trusted domain
+        response.setHeader("Access-Control-Allow-Origin", "https://trusted.example.com");
+        response.getWriter().write("Sensitive Data");
+    }
+}
+```
+
+---
+
+### API8: Injection
+
+**Description:**  
+Injection flaws, such as SQL, NoSQL, or command injections, occur when untrusted input is sent to an interpreter as part of a command or query.
+
+**Vulnerable Example:**
+```java
+// Vulnerable SQL Injection example
+public class UserDAO {
+    public User getUserByUsername(String username) {
+        String query = "SELECT * FROM users WHERE username = '" + username + "'";
+        // Execute query directly (vulnerable to SQL injection)
+        return Database.executeQuery(query);
+    }
+}
+```
+
+**Mitigation:**  
+Use parameterized queries or prepared statements.
+```java
+public class UserDAO {
+    public User getUserByUsername(String username) throws SQLException {
+        String query = "SELECT * FROM users WHERE username = ?";
+        PreparedStatement stmt = Database.getConnection().prepareStatement(query);
+        stmt.setString(1, username);
+        ResultSet rs = stmt.executeQuery();
+        // Process the result set safely
+        return mapUser(rs);
+    }
+}
+```
+
+---
+
+### API9: Improper Assets Management
+
+**Description:**  
+APIs sometimes expose non-production versions, outdated endpoints, or debug information which can be exploited.
+
+**Vulnerable Example:**
+```java
+// Vulnerable: An endpoint that should not be public is exposed
+@WebServlet("/api/debug")
+public class DebugServlet extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        response.getWriter().write("Debug information: full system dump");
+    }
+}
+```
+
+**Mitigation:**  
+Ensure that only necessary endpoints are exposed and disable debugging in production.
+```java
+// In production, remove or secure the debug endpoint
+@WebServlet("/api/debug")
+public class DebugServlet extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        response.sendError(HttpServletResponse.SC_FORBIDDEN, "Not available");
+    }
+}
+```
+
+---
+
+### API10: Insufficient Logging & Monitoring
+
+**Description:**  
+Without proper logging and monitoring, it becomes difficult to detect or respond to breaches in a timely manner.
+
+**Vulnerable Example:**
+```java
+// Vulnerable: Minimal logging which omits critical context
+public class PaymentService {
+    public void processPayment(String userId, double amount) {
+        // Payment processed but no logging of unusual events
+        PaymentGateway.charge(userId, amount);
+    }
+}
+```
+
+**Mitigation:**  
+Implement detailed logging (avoiding sensitive data exposure) and monitoring.
+```java
+public class PaymentService {
+    private static final Logger logger = Logger.getLogger(PaymentService.class.getName());
+    
+    public void processPayment(String userId, double amount) {
+        try {
+            PaymentGateway.charge(userId, amount);
+            logger.info("Payment processed for user: " + userId + " amount: " + amount);
+        } catch (Exception e) {
+            logger.severe("Payment failed for user: " + userId + " Error: " + e.getMessage());
+            throw e;
+        }
+    }
+}
+```
+
+---
+
+## SANS Top 25 Vulnerabilities (Selected Examples)
+
+The SANS Top 25 list covers common programming errors that often lead to vulnerabilities. Below are several examples relevant to Java development:
+
+### 1. SQL Injection (CWE-89)
+
+**Description:**  
+Improper handling of user input can allow attackers to inject SQL commands.
+
+**Vulnerable Example:**
+```java
+public class VulnerableDAO {
+    public User getUser(String username) {
+        String query = "SELECT * FROM users WHERE username = '" + username + "'";
+        // Executing query directly can lead to SQL injection
+        return Database.executeQuery(query);
+    }
+}
+```
+
+**Mitigation:**  
+Always use prepared statements.
+```java
+public class SecureDAO {
+    public User getUser(String username) throws SQLException {
+        String query = "SELECT * FROM users WHERE username = ?";
+        PreparedStatement stmt = Database.getConnection().prepareStatement(query);
+        stmt.setString(1, username);
+        ResultSet rs = stmt.executeQuery();
+        return mapUser(rs);
+    }
+}
+```
+
+---
+
+### 2. OS Command Injection (CWE-78)
+
+**Description:**  
+When untrusted input is used to build commands executed on the host system, an attacker can execute arbitrary commands.
+
+**Vulnerable Example:**
+```java
+public class CommandExecutor {
+    public String runCommand(String userInput) throws IOException {
+        // Direct concatenation of input into OS command
+        Process process = Runtime.getRuntime().exec("ls " + userInput);
+        return readProcessOutput(process);
+    }
+}
+```
+
+**Mitigation:**  
+Validate and sanitize inputs; if possible, avoid dynamic command execution.
+```java
+public class SecureCommandExecutor {
+    public String runCommand(String directory) throws IOException {
+        // Validate that 'directory' matches an expected pattern
+        if (!directory.matches("[a-zA-Z0-9_/]+")) {
+            throw new IllegalArgumentException("Invalid directory");
+        }
+        Process process = Runtime.getRuntime().exec(new String[]{"ls", directory});
+        return readProcessOutput(process);
+    }
+}
+```
+
+---
+
+### 3. Insecure Deserialization (CWE-502)
+
+**Description:**  
+Deserializing untrusted data can lead to remote code execution if attacker-controlled classes are instantiated.
+
+**Vulnerable Example:**
+```java
+public class DeserializationService {
+    public Object deserialize(byte[] data) throws IOException, ClassNotFoundException {
+        ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(data));
+        return ois.readObject(); // Vulnerable if data is untrusted
+    }
+}
+```
+
+**Mitigation:**  
+Use safe deserialization practices, such as filtering allowed classes.
+```java
+public class SecureDeserializationService {
+    public Object deserialize(byte[] data) throws IOException, ClassNotFoundException {
+        try (ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(data)) {
+            @Override
+            protected Class<?> resolveClass(ObjectStreamClass desc) throws IOException, ClassNotFoundException {
+                // Only allow whitelisted classes
+                if (!allowedClasses.contains(desc.getName())) {
+                    throw new InvalidClassException("Unauthorized deserialization attempt", desc.getName());
+                }
+                return super.resolveClass(desc);
+            }
+        }) {
+            return ois.readObject();
+        }
+    }
+}
+```
+
+---
+
+### 4. Improper Input Validation (CWE-20)
+
+**Description:**  
+Failure to validate input properly can allow unexpected or malicious data to be processed.
+
+**Vulnerable Example:**
+```java
+public class InputHandler {
+    public void processAge(String ageStr) {
+        // Directly converting input without validation
+        int age = Integer.parseInt(ageStr);
+        System.out.println("Age: " + age);
+    }
+}
+```
+
+**Mitigation:**  
+Validate input ranges and formats.
+```java
+public class SecureInputHandler {
+    public void processAge(String ageStr) {
+        try {
+            int age = Integer.parseInt(ageStr);
+            if (age < 0 || age > 130) {
+                throw new IllegalArgumentException("Age out of range");
+            }
+            System.out.println("Age: " + age);
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid age input");
+        }
+    }
+}
+```
+
+---
+
+### 5. Cross-Site Scripting (XSS) (CWE-79)
+
+**Description:**  
+When applications include user-controllable data in web pages without proper escaping, attackers can inject scripts.
+
+**Vulnerable Example (in a Java web app):**
+```java
+@WebServlet("/displayComment")
+public class CommentServlet extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        String comment = request.getParameter("comment");
+        // Directly writing the comment into the response – vulnerable to XSS
+        response.getWriter().write("<html><body>" + comment + "</body></html>");
+    }
+}
+```
+
+**Mitigation:**  
+Escape or sanitize output before rendering.
+```java
+@WebServlet("/displayComment")
+public class CommentServlet extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        String comment = request.getParameter("comment");
+        // Use a library or framework method to escape HTML
+        String safeComment = HtmlUtils.escapeHtml(comment);
+        response.getWriter().write("<html><body>" + safeComment + "</body></html>");
+    }
+}
+```
+
+---
+
+### 6. Cross-Site Request Forgery (CSRF) (CWE-352)
+
+**Description:**  
+CSRF tricks an authenticated user’s browser into making unwanted requests. Although Java backends do not “display” CSRF, the vulnerability lies in failing to verify that requests are intentional.
+
+**Vulnerable Example:**
+```java
+@WebServlet("/transfer")
+public class TransferServlet extends HttpServlet {
+    protected void doPost(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        // No CSRF token validation
+        String amount = request.getParameter("amount");
+        // Process money transfer
+    }
+}
+```
+
+**Mitigation:**  
+Implement CSRF tokens and validate them on sensitive operations.
+```java
+@WebServlet("/transfer")
+public class SecureTransferServlet extends HttpServlet {
+    protected void doPost(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        String sessionToken = (String) request.getSession().getAttribute("csrfToken");
+        String requestToken = request.getParameter("csrfToken");
+        if (sessionToken == null || !sessionToken.equals(requestToken)) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "CSRF token invalid");
+            return;
+        }
+        String amount = request.getParameter("amount");
+        // Process transfer securely
+    }
+}
+```
+
+---
+
+### 7. Broken Access Control (CWE-285)
+
+**Description:**  
+Similar to API authorization issues, broken access control in general code can lead to unauthorized operations.
+
+**Vulnerable Example:**
+```java
+public class FileService {
+    public String readFile(String filePath) throws IOException {
+        // No access control checks
+        return new String(Files.readAllBytes(Paths.get(filePath)));
+    }
+}
+```
+
+**Mitigation:**  
+Implement checks to ensure the caller has permission.
+```java
+public class SecureFileService {
+    public String readFile(String filePath, User currentUser) throws IOException {
+        if (!currentUser.canAccess(filePath)) {
+            throw new SecurityException("Access denied");
+        }
+        return new String(Files.readAllBytes(Paths.get(filePath)));
+    }
+}
+```
+
+---
+
+### 8. Path Traversal (CWE-22)
+
+**Description:**  
+Attackers can manipulate file paths to access files outside of the intended directory structure.
+
+**Vulnerable Example:**
+```java
+public class FileDownloadServlet extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        String filename = request.getParameter("file");
+        // Directly use the filename parameter – vulnerable to path traversal
+        File file = new File("/var/www/files/" + filename);
+        Files.copy(file.toPath(), response.getOutputStream());
+    }
+}
+```
+
+**Mitigation:**  
+Sanitize the file path and restrict access to a predefined directory.
+```java
+public class SecureFileDownloadServlet extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        String filename = request.getParameter("file");
+        // Prevent path traversal by validating the filename format
+        if (!filename.matches("[a-zA-Z0-9_\\-]+\\.txt")) {
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid file name");
+            return;
+        }
+        File file = new File("/var/www/files/", filename);
+        Files.copy(file.toPath(), response.getOutputStream());
+    }
+}
+```
+
+---
+
